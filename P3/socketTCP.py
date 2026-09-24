@@ -19,7 +19,7 @@ class SocketTCP:
 
     # métodos para crear y parsear segmentos
 
-    def create_segment(self, seq: int, ack: int, syn: int, ack_flag: int, fin: int, data: bytes = b"") -> bytes:
+    def create_segment(self, seq: int, ack: int, syn: int = 0, ack_flag: int=0, fin: int=0, data: bytes = b"") -> bytes:
         # Armamos el byte de flags
         flags = 0
         if syn: flags |= 0b100
@@ -29,3 +29,6 @@ class SocketTCP:
         # to_bytes convierte enteros a bytes
         header = seq.to_bytes(1, 'big') + ack.to_bytes(1, 'big') + flags.to_bytes(1, 'big') + b'\x00'
         return header + data 
+
+    def parse_segment(self, segment: bytes) -> tuple[int, int, int, int, int, bytes]:
+        return
