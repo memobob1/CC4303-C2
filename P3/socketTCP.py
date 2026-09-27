@@ -170,7 +170,7 @@ class SocketTCP:
                 # ya es conocida por el socket cliente.
                 new_address = ('localhost', new_port)
                 new_socket.bind(new_address)
-                return new_socket
+                return new_socket, new_address
 
 mi_socket = SocketTCP()
 

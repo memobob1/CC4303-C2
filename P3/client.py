@@ -1,10 +1,13 @@
-import socket, math
+import socket, SocketTCP
 
 # cliente que se comunica con udp
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 server_host = 'localhost'
 server_port = 8000
+
+client_socketTCP = SocketTCP.SocketTCP()
+client_socketTCP.connect(address)
 
 address = (server_host, server_port)
 
