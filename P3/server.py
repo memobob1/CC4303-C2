@@ -1,9 +1,12 @@
-import socket
+import socket, SocketTCP
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server_socket.bind(('localhost', 8000))
+address = ('localhost', 8000)
+
+server_socketTCP = SocketTCP.SocketTCP()
+server_socketTCP.bind(address)
+connection_socketTCP, new_address = server_socketTCP.accept()
 
 while True:
-    data, addr = server_socket.recvfrom(2 + 1 + 16)
+    data, addr = connection_socketTCP.udp_socket.recvfrom(2 + 1 + 16)
     print(f"Received message: {data.decode()} from {addr}")
     

@@ -39,7 +39,7 @@ class SocketTCP:
         # Socket UDP subyacente
         self.udp_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         #Timeout para stop & wait
-        self.udp_socket.settimeout(1.0)
+        self.udp_socket.settimeout(10.0)
 
         # Acá comenzamos definiendo cada byte
         self.dest_addr: tuple[str, int] | None = None
@@ -126,7 +126,7 @@ class SocketTCP:
         else:
             self.dest_addr = None
 
-    def accept(self):
+    def accept(self) -> tuple["SocketTCP", tuple[str, int]]:
         """Espera una petición de tipo SYN para iniciar una comunicación con otro socket.
         
         Retorna:
@@ -172,18 +172,20 @@ class SocketTCP:
                 new_socket.bind(new_address)
                 return new_socket, new_address
 
-mi_socket = SocketTCP()
+if __name__ == "__main__":
 
-test_1 = b'\x00\x20\x05\x06Este es un mensaje'
-print(test_1)
-parsed_segment_tcp: ParsedSegmentTCP = mi_socket.parse_segment(test_1)
+    mi_socket = SocketTCP()
 
-print(parsed_segment_tcp.seq)
-print(parsed_segment_tcp.syn)
-print(parsed_segment_tcp.ack)
-print(parsed_segment_tcp.fin)
-print(parsed_segment_tcp.data)
+    test_1 = b'\x00\x20\x05\x06Este es un mensaje'
+    print(test_1)
+    parsed_segment_tcp: ParsedSegmentTCP = mi_socket.parse_segment(test_1)
 
-test_2 = mi_socket.create_segment(parsed_segment_tcp)
-print("Nuevo segmento:", test_2)
-print(test_1 == test_2)
+    print(parsed_segment_tcp.seq)
+    print(parsed_segment_tcp.syn)
+    print(parsed_segment_tcp.ack)
+    print(parsed_segment_tcp.fin)
+    print(parsed_segment_tcp.data)
+
+    test_2 = mi_socket.create_segment(parsed_segment_tcp)
+    print("Nuevo segmento:", test_2)
+    print(test_1 == test_2)
