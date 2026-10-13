@@ -187,17 +187,17 @@ class SocketTCP:
 
         total_length: int = len(message)
         length_bytes: bytes = total_length.to_bytes(4, "big")
-        lenght_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
+        length_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
 
         # Stop & Wait para el pimer segmento (largo)
         while True:
-            self.udp_socket.sendto(self.create_segment(lenght_segment), self.dest_addr)
+            self.udp_socket.sendto(self.create_segment(length_segment), self.dest_addr)
             try:
                 self.udp_socket.settimeout(self.timeout)
                 ack_segment, _ = self.udp_socket.recvfrom(self.buffer_size)
                 ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
-                if ack_segment_struct.seq == self.seq + 1 and ack_segment_struct.ack:
-                    self.seq += 1
+                if ack_segment_struct.seq == self.seq + len(length_bytes) and ack_segment_struct.ack:
+                    self.seq += len(length_bytes)
                     break
             except (socket.timeout, ConnectionResetError): 
                 continue
@@ -222,10 +222,10 @@ class SocketTCP:
                     ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
 
                     # Si la secuencia recibida es la esperada (self.seq + 1) y el mensaje contiene un ACK, entonces se incrementa el número de secuencia y se continúa con el siguiente fragmento.
-                    if ack_segment_struct.seq == self.seq + 1 and ack_segment_struct.ack:
+                    if ack_segment_struct.seq == self.seq + len(block) and ack_segment_struct.ack:
                         # Si se recibe el mensaje ACK esperado, se incrementa el número de secuencia y se continúa con el siguiente fragmento.
-                        self.seq += 1
-                        i += 16
+                        self.seq += len(block)
+                        i += len(block)
                         break
                 
                 # Si nunca nos llegó el mensaje ACK dentro del timeout, entonces se retransmite el segmento.
@@ -252,11 +252,11 @@ class SocketTCP:
                     self.bytes_remaining = int.from_bytes(segment_struct.data, "big")
 
                     # Enviamos mensaje ACK
-                    ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + 1, ack=1)
+                    ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + len(segment_struct.data), ack=1)
                     self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
-                    self.expected_seq += 1
+                    self.expected_seq += len(segment_struct.data)
                     break
-                else: # Caso borde
+                elif segment_struct.seq < self.expected_seq: # Caso borde
                     # Si llega algo fuera de seq
                     ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq, ack=1)
                     self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
@@ -274,13 +274,13 @@ class SocketTCP:
                 self.bytes_remaining -= len(segment_struct.data)
 
                 # Se envía un mensaje ACK con el número de secuencia incrementado en 1.
-                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + 1, ack=1)
+                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + len(segment_struct.data), ack=1)
                 self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
 
                 # Se incrementa el número de secuencia esperado para el siguiente segmento.
-                self.expected_seq += 1
+                self.expected_seq += len(segment_struct.data)
 
-            else: # Caso borde
+            elif segment_struct.seq < self.expected_seq: # Caso borde
                 # Si el numero de secuencia no coincide,
                 # probablemente el mensaje no llegó y se volvió a enviar (por parte del emisor)
                 # Entonces se envía un mensaje ACK con el número de secuencia esperado.
