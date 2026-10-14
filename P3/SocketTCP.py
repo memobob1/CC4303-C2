@@ -1,5 +1,4 @@
-import socket 
-import random
+import socket, random
 
 SEQ_NBYTES: int = 2
 FREE_PORT: int = 8001
@@ -328,69 +327,70 @@ class SocketTCP:
         fin_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, fin=1)
         
         # Implementamos Stop & Wait para enviar el segmento FIN y esperar un ACK del socket destino.
-        while True:
+
+        timeouts_completed: int = 0
+        while timeouts_completed < 3:
             self.udp_socket.sendto(self.create_segment(fin_segment), self.dest_addr)
             try:
                 self.udp_socket.settimeout(self.timeout)
-                ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
+                fin_ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
+                fin_ack_segment: ParsedSegmentTCP = self.parse_segment(fin_ack_bytes)
 
-                # Comprobamos si el mensaje recibido es un ACK con el número de secuencia esperado (self.seq + 1).
-                if ack_segment.seq == self.seq + 1 and ack_segment.ack:
+                # Comprobamos si el mensaje recibido es un FIN + ACK con el número de secuencia esperado (self.seq + 1).
+                if fin_ack_segment.seq == self.seq + 1 and fin_ack_segment.fin and fin_ack_segment.ack:
+                    timeouts_completed = 0
                     break
             except (socket.timeout, ConnectionResetError):
-                continue
+                timeouts_completed += 1
 
-        # Esperamos el mensaje fin del receptor
-        while True:
+        # Enviamos 3 veces el mensaje ACK al receptor.
+        while timeouts_completed < 3:
             try:
                 self.udp_socket.settimeout(self.timeout)
-                fin_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
-
-                if fin_segment.fin == 1:
-                    last_ack = ParsedSegmentTCP(fin_segment.seq + 1, ack=1)
-                    self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
-                    break
+                last_ack = ParsedSegmentTCP(fin_segment.seq + 2, ack=1)
+                self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+                self.udp_socket.recvfrom(self.buffer_size)
             except (socket.timeout, ConnectionResetError):
-                continue
+                timeouts_completed += 1
 
         # Liberamos los recursos asociados al socket UDP subyacente.
         self.udp_socket.close()
 
     def recv_close(self):
         """Maneja el fin de conexión desde el lado del receptor."""     
-        other_seq: int = 0
-
         # receptor espera recibir el mensaje fin del emisor
         while True:
             try:
                 self.udp_socket.settimeout(self.timeout)
-                fin_bytes, other_addr = self.udp_socket.recvfrom(self.buffer_size)
-                fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
+                fin_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
 
-                if fin_segment.fin == 1:
-                    other_seq = fin_segment.seq
-                    ack_segment = ParsedSegmentTCP(other_seq + 1, ack=1)
-                    self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
-                    break
             except (socket.timeout, ConnectionResetError):
                 continue
 
-        # Ahora el receptor envía su propio mensaje fin al emisor
-        fin_segment = ParsedSegmentTCP(self.seq, fin=1)
+            fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
+            if fin_segment.fin:
+                fin_ack_segment = ParsedSegmentTCP(self.seq + 1, fin=1, ack=1)
+                self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
+                break
 
-        while True:
-            self.udp_socket.sendto(self.create_segment(fin_segment), self.dest_addr)
+        timeouts_completed = 0
+        while timeouts_completed < 3:
             try:
                 self.udp_socket.settimeout(self.timeout)
                 ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
 
-                if ack_segment.seq == self.seq + 1 and ack_segment.ack:
-                    break
             except (socket.timeout, ConnectionResetError):
+                timeouts_completed += 1
                 continue
+
+            ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
+            if ack_segment.seq == self.seq + 2 and ack_segment.ack:
+                break
+
+            elif ack_segment.seq == self.seq and ack_segment.fin:
+                fin_ack_segment = ParsedSegmentTCP(self.seq + 1, fin=1, ack=1)
+                self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
+                timeouts_completed = 0
 
         # Liberamos los recursos asociados al socket UDP subyacente.
         self.udp_socket.close()
