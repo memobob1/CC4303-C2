@@ -373,6 +373,11 @@ class SocketTCP:
                 self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
                 break
 
+            elif fin_segment.seq < self.seq:
+                # El emisor no recibió el ultimo ACK, entonces se vuelve a reenviar.
+                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, ack=1)
+                self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
+
         timeouts_completed = 0
         while timeouts_completed < 3:
             try:
