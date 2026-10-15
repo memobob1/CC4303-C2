@@ -1,14 +1,6 @@
 import socket, random
 
 SEQ_NBYTES: int = 2
-FREE_PORT: int = 8001
-
-def get_new_port() -> int:
-    global FREE_PORT
-    new_port = FREE_PORT
-    FREE_PORT += 1
-    return new_port
-
 
 class ParsedSegmentTCP:
     """Almacena de forma organizada la información de un segmento TCP.
