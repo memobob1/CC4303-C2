@@ -175,6 +175,9 @@ class SocketTCP:
                 new_address = ('localhost', new_port)
                 new_socket.bind(new_address)
                 return new_socket, new_address
+            
+            elif third_segment_struct.seq != other_seq + 2 or not third_segment_struct.ack:
+                raise ConnectionError("El mensaje recibido no es un ACK válido.")
 
 
 
@@ -184,7 +187,7 @@ class SocketTCP:
         Atributos:
             message: Un mensaje en bytes que se desea enviar.
         """
-
+        
         total_length: int = len(message)
         length_bytes: bytes = total_length.to_bytes(4, "big")
         lenght_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
@@ -280,7 +283,7 @@ class SocketTCP:
                 # Se incrementa el número de secuencia esperado para el siguiente segmento.
                 self.expected_seq += 1
 
-            else: # Caso borde
+            elif segment_struct.seq < self.expected_seq: # Caso borde
                 # Si el numero de secuencia no coincide,
                 # probablemente el mensaje no llegó y se volvió a enviar (por parte del emisor)
                 # Entonces se envía un mensaje ACK con el número de secuencia esperado.
