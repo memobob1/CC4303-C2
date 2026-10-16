@@ -334,12 +334,15 @@ class SocketTCP:
         # Enviamos 3 veces el mensaje ACK al receptor.
         while timeouts_completed < 3:
             print("El emisor envía un ACK para finalizar el close().")
-            try:
-                last_ack = ParsedSegmentTCP(self.seq + 2, ack=1)
-                self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
-                self.udp_socket.recvfrom(self.buffer_size)
-            except (socket.timeout, ConnectionResetError):
-                timeouts_completed += 1
+            last_ack = ParsedSegmentTCP(self.seq + 2, ack=1)
+            self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+
+            while True:
+                try:
+                    self.udp_socket.recvfrom(self.buffer_size)
+                except (socket.timeout, ConnectionResetError):
+                    timeouts_completed += 1
+                    break
 
         # Liberamos los recursos asociados al socket UDP subyacente.
         self.udp_socket.close()
@@ -366,13 +369,15 @@ class SocketTCP:
                 self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
 
         timeouts_completed = 0
+        self.udp_socket.settimeout(self.timeout)
+        print("El receptor espera 3 timeouts para recibir un ACK del emisor.")
         while timeouts_completed < 3:
             try:
-                self.udp_socket.settimeout(self.timeout)
                 ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
 
             except (socket.timeout, ConnectionResetError):
                 timeouts_completed += 1
+                print(f"Timeouts completados: {timeouts_completed}")
                 continue
 
             ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
@@ -381,8 +386,9 @@ class SocketTCP:
                 break
 
             elif ack_segment.seq == self.seq and ack_segment.fin:
+                print("El receptor ha recibido otro mensaje FIN del emisor.")
+                print("El receptor reenvía un FIN + ACK al emisor, y vuelve a esperar durante otros 3 timeouts.")
                 fin_ack_segment = ParsedSegmentTCP(self.seq + 1, fin=1, ack=1)
-                print("El receptor envía un FIN + ACK para continuar el cierre de la conexión.")
                 self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
                 timeouts_completed = 0
 
