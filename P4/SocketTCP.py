@@ -57,6 +57,7 @@ class SocketTCP:
         self.congestion_control_on: bool = False
         self.congestion_controler: CongestionControl = CongestionControl(MSS=8)
         self.debug: bool = False
+        self.number_of_sent_segments: int = 0
 
     def set_congestion_control(self, on: bool):
         self.congestion_control_on = on
@@ -170,27 +171,48 @@ class SocketTCP:
 
             # Se espera a recibir un mensaje ACK del socket cliente con el número de secuencia
             # original incrementado en 2.
-            third_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
-            third_segment_struct = self.parse_segment(third_handshake_step)
+            # Se espera a recibir un mensaje ACK del socket cliente con el número de secuencia original
+            while True:
+                try:
+                    self.udp_socket.settimeout(self.timeout)
+                    third_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
+                    third_segment_struct = self.parse_segment(third_handshake_step)
 
-            if third_segment_struct.seq == other_seq + 2 and third_segment_struct.ack:
+                    if third_segment_struct.seq == other_seq + 2 and third_segment_struct.ack:
+                        try:
+                            self.udp_socket.stop_timer(0)
+                        except Exception:
+                            pass
+                        break
+                    
+                    # Si el ACK se perdió en la red pero nos llega un fragmento de datos
+                    elif third_segment_struct.seq > other_seq + 2:
+                        try:
+                            self.udp_socket.stop_timer(0)
+                        except Exception:
+                            pass
+                        break
 
-                # Se crea el nuevo socket que podrá enviar mensajes a la dirección del socket cliente.
-                # Este socket contendrá el número de secuencia recibido en el primer segmento del socket cliente.
-                new_socket: SocketTCP = SocketTCP()
-                new_socket.dest_addr = other_address
-                new_socket.seq = other_seq
+                except (socket.timeout, TimeoutError, ConnectionResetError):
+                    # Evita el RuntimeError de los hilos
+                    try:
+                        self.udp_socket.stop_timer(0)
+                    except Exception:
+                        pass
+                    
+                    # Retransmitimos el SYN+ACK
+                    self.udp_socket.sendto(second_handshake_step, other_address)
+                    continue
 
-                new_socket.expected_seq = other_seq + 3
+            # Se crea el nuevo socket que podrá enviar mensajes a la dirección del socket cliente.
+            new_socket: SocketTCP = SocketTCP()
+            new_socket.dest_addr = other_address
+            new_socket.seq = other_seq
+            new_socket.expected_seq = other_seq + 3
 
-                # Este nuevo socket estará escuchando en la dirección generada previamente, y que además
-                # ya es conocida por el socket cliente.
-                new_address = ('localhost', new_port)
-                new_socket.bind(new_address)
-                return new_socket, new_address
-            
-            elif third_segment_struct.seq != other_seq + 2 or not third_segment_struct.ack:
-                raise ConnectionError("El mensaje recibido no es un ACK válido.")
+            new_address = ('localhost', new_port)
+            new_socket.bind(new_address)
+            return new_socket, new_address
 
 
 
@@ -318,6 +340,7 @@ class SocketTCP:
                 seq = data_window.get_sequence_number(idx)
                 segment = self.create_segment(ParsedSegmentTCP(seq, data=data))
                 self.udp_socket.sendto(segment, self.dest_addr, timer_index=0)
+                self.number_of_sent_segments += 1
 
         def send_elements_in_window(start_index: int, end_index: int) -> None:
             ''' Función auxiliar que envía todos los segmentos de datos en la ventana de datos desde start_index hasta end_index (exclusivo).
@@ -361,8 +384,11 @@ class SocketTCP:
                             # entonces todos los segmentos anteriores de la ventana han sido recibidos por el destinatario.
                             steps = last_idx + 1
             
-                            self.udp_socket.stop_timer(timer_index=0) # detenemos el timer del socket UDP para evitar que se dispare mientras se procesa el ACK recibido.
-                                
+                            try:
+                                self.udp_socket.stop_timer(0)
+                            except Exception:
+                                pass
+
                             data_window.move_window(steps) # movemos la ventana steps posiciones hacia adelante
                             
                             # Si se tiene el congestion control activado
@@ -408,7 +434,11 @@ class SocketTCP:
                         # se mueve la ventana y se actualiza el tamaño de la ventana de congestión si está activado.    
                         if steps > 0:
                             
-                            self.udp_socket.stop_timer(timer_index=0)      
+                            try:
+                                self.udp_socket.stop_timer(0)
+                            except Exception:
+                                pass
+
                             data_window.move_window(steps)
                             
                             # caso congestion control esta activado
@@ -454,7 +484,10 @@ class SocketTCP:
             # y reenviar todos los elementos de la ventana desde el primero hasta el último.      
             except (socket.timeout, TimeoutError, ConnectionResetError):
 
-                self.udp_socket.stop_timer(timer_index=0)
+                try:
+                    self.udp_socket.stop_timer(0)
+                except Exception:
+                    pass
 
                 # si el congestion control está activado  
                 if self.congestion_control_on:
@@ -471,6 +504,7 @@ class SocketTCP:
                 elements_sent = 0
                 send_elements_in_window(0, window_size) # enviamos todos los elementos de la ventana desde el primero hasta el último (go-back-n)
                 elements_sent = window_size
+
 
     def recv_using_go_back_n(self, buff_size: int) -> bytes:
         # Primer recepción de un mensaje nuevo que contiene la longitud del mensaje
@@ -602,8 +636,18 @@ class SocketTCP:
 
                 # Comprobamos si el mensaje recibido es un ACK con el número de secuencia esperado (self.seq + 1).
                 if ack_segment.seq == self.seq + 1 and ack_segment.ack:
+                    #Detener timer en caso de éxito
+                    try:
+                        self.udp_socket.stop_timer(0)
+                    except Exception:
+                        pass
                     break
             except (socket.timeout, TimeoutError, ConnectionResetError):
+                # Detener timer antes de reintentar
+                try:
+                    self.udp_socket.stop_timer(0)
+                except Exception:
+                    pass
                 continue
 
         # Esperamos el mensaje fin del receptor
@@ -616,6 +660,22 @@ class SocketTCP:
                 if fin_segment.fin == 1:
                     last_ack = ParsedSegmentTCP(fin_segment.seq + 1, ack=1)
                     self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+                    
+                    # Estado TIME_WAIT.
+                    # No cerramos al instante. Esperamos por si el servidor perdió nuestro 
+                    # último ACK y retransmite su FIN.
+                    try:
+                        self.udp_socket.settimeout(self.timeout * 3) # Esperar 3 ciclos
+                        while True:
+                            extra_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
+                            extra_seg = self.parse_segment(extra_bytes)
+                            if extra_seg.fin == 1:
+                                self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+                    except (socket.timeout, TimeoutError, ConnectionResetError):
+                        # Si ocurre timeout aquí, significa que el servidor no insistió más 
+                        # y recibió el ACK con éxito. Podemos cerrar seguros.
+                        pass 
+                    
                     break
             except (socket.timeout, TimeoutError, ConnectionResetError):
                 continue
@@ -639,6 +699,12 @@ class SocketTCP:
                     ack_segment = ParsedSegmentTCP(other_seq + 1, ack=1)
                     self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
                     break
+                else:
+                    # Si llega un segmento sin FIN, el cliente probablemente
+                    # perdió el último ACK de los datos. Reenviamos el ACK.
+                    ack_segment = ParsedSegmentTCP(self.expected_seq, ack=1)
+                    self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
+
             except (socket.timeout, TimeoutError, ConnectionResetError):
                 continue
 
@@ -653,8 +719,21 @@ class SocketTCP:
                 ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
 
                 if ack_segment.seq == self.seq + 1 and ack_segment.ack:
+                    try:
+                        self.udp_socket.stop_timer(0)
+                    except Exception:
+                        pass
                     break
+                # El cliente retransmitió su FIN porque perdió nuestro ACK.
+                elif ack_segment.fin == 1:
+                    ack_to_client = ParsedSegmentTCP(ack_segment.seq + 1, ack=1)
+                    self.udp_socket.sendto(self.create_segment(ack_to_client), self.dest_addr)
+
             except (socket.timeout, TimeoutError, ConnectionResetError):
+                try:
+                    self.udp_socket.stop_timer(0)
+                except Exception:
+                    pass
                 continue
 
         # Liberamos los recursos asociados al socket UDP subyacente.
