@@ -169,7 +169,7 @@ class SocketTCP:
                 segment.data = new_port.to_bytes(4, "big")
                 second_handshake_step: bytes = self.create_segment(segment)
 
-                while True:f
+                while True:
                     # Se envía el segundo handshake.
                     print(f"El receptor envía el segundo handshake con la secuencia {other_seq + 1}")
                     self.udp_socket.sendto(second_handshake_step, other_address)
