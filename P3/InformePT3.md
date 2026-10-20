@@ -40,6 +40,8 @@ Después de extraer la información del segmento, se construye y retorna la inst
 
 Recibe una instancia de ParsedSegmentTCP y convierte su información en una cadena de bytes que representa un segmento TCP.
 
+SEQ_NBYTES representa la cantidad de bytes que utiliza el número de secuencia.
+
 1) Los primeros SEQ_NBYTES bytes de la cadena son el número de secuencia almacenado en la estructura.
 2) El byte (SEQ_NBYTES + 1) se arma de la siguiente forma:
     - Se multiplica por 4 el valor del campo "syn" de ParsedSegmentTCP. Si "syn" es 1,
@@ -152,11 +154,11 @@ Por eso en el paso 10 se establece que el número de secuencia del receptor es (
 
 ## Diagrama del paso 4
 
-![Diagrama de la pregunta 4]("Diagrama_de_P4.png")
+![Diagrama de la pregunta 4](Diagrama_de_P4.png)
 
 ## Diagrama del paso 7
 
-![Diagrama de la pregunta 7]("Diagrama_de_P7.png")
+![Diagrama de la pregunta 7](Diagrama_de_P7.png)
 
 ## El método send
 
