@@ -9,6 +9,8 @@ Auxiliar: Julián Ferreira
 
 Enlace de github: https://github.com/memobob1/CC4303-C2/tree/main/P3
 
+## Manejo de segmentos TCP
+
 ### La estructura de datos ParsedSegmentTCP
 
 Para almacenar eficientemente la información de un segmento TCP, se implementó la estructura ParsedSegmentTCP con los siguientes campos:
@@ -23,7 +25,7 @@ Para almacenar eficientemente la información de un segmento TCP, se implementó
 
 Recibe un segmento TCP escrito en bytes y retorna una instancia de ParsedSegmentTCP.
 
-Un segmento TCP está organizado por una sección de headers, los primeros (SEQ_NBYTES + 1) bytes, y una sección de datos. Así se descompone:
+Un segmento TCP está organizado por una sección de headers que serían los primeros (SEQ_NBYTES + 1) bytes, y por una sección de datos. Así se descompone:
 - Los primeros SEQ_NBYTES bytes contienen el número de secuencia del segmento.
 - El byte (SEQ_NBYTES + 1) representa si el segmento incluye un mensaje SYN, ACK y/o FIN:
   - Su tercer bit menos significativo indica el valor de SYN.
@@ -56,7 +58,7 @@ Recibe una instancia de ParsedSegmentTCP y convierte su información en una cade
 
 ### Decisiones de diseño
 
-Se decidió crear una clase para
+Para esta tarea se decidió usar SEQ_NBYTES = 2, pero se puede poner cualquier otro valor como 3 o 4.
 
 ## La clase SocketTCP
 
@@ -102,6 +104,11 @@ Recibe una dirección e inicia una conexión con un SocketTCP que esté escuchan
 7) Usando la dirección original que recibió el método, se envía el nuevo segmento TCP al socket receptor original.
 8) Finalmente se actualiza el número de secuencia del emisor a (self.seq + 3).
 
+### Decisiones de diseño y casos bordes.
+
+En el paso 6 se envía el tercer handshake con el número de secuencia self.seq + 2. Para reducir confusiones, en el paso 8
+se impone que el envío del mensaje real inicia desde el número de secuencia self.seq + 3.
+
 ## El método accept
 
 Espera una petición de tipo SYN para iniciar una comunicación con otro socket, y retorna un nuevo SocketTCP junto con su dirección.
@@ -135,6 +142,13 @@ El socket que utilice este método se comportará como el socket receptor del th
       un ACK. De lo contrario, nos devolvemos al paso 8.
 10) Se establece que el número de secuencia del nuevo SocketTCP es (other_seq + 3).
 11) Se retorna el nuevo SocketTCP junto con la dirección de ese nuevo SocketTCP.
+
+### Decisiones de diseño y casos bordes.
+
+Al final de este proceso, el socket receptor original se mantiene activo infinitamente esperando a recibir nuevas peticiones "connect" de otros emisores.
+
+En el método "connect" establecimos que el número de secuencia que el emisor utilizará para empezar a enviar el mensaje real es (self.seq + 3).
+Por eso en el paso 10 se establece que el número de secuencia del receptor es (other_seq + 3).
 
 ## El método send
 
@@ -174,6 +188,14 @@ Se divide el mensaje en bloques de 16 bytes, a excepción del último bloque que
 8) Se actualiza el número de secuencia del emisor. Ahora es (self.seq + len(block)).
 9) Se actualiza el valor de "i". Ahora es (i + len(block)) y se retorna al paso 5 siempre y cuando "i" sea menor que el largo total
    mensaje (que se obtuvo en el paso 1).
+
+### Decisiones de diseño y casos bordes.
+
+Tal como lo recomienda el enunciado, lo primero que envía la función send es el largo del mensaje completo.
+
+Un caso borde se produce cuando se pierde el tercer handshake de la función "connect". En ese instante el socket emisor avanza a la función
+"send" pero el socket servidor sigue esperando a recibir el tercer handshake. Por ese motivo, la función "send" debe reenviar el tercer
+handshake al socket servidor. La solución se aprecia en el paso 3.
 
 ## El método recv
 
@@ -217,7 +239,102 @@ recibe el largo del mensaje completo.
 15) Se eliminan los primeros "buff_size" bytes de "self.recv_buffer".
 16) Se retorna "return_data".
 
+### Decisiones de diseño y casos bordes.
+
+Es en esta función donde se utilizan los campos "self.bytes_remaining" y "self.recv_buffer". El primer campo nos permite saber que aún nos quedan
+bytes por recibir. Mientras que el segundo campo almacena los bytes que se reciben.
+
+Un caso borde se produce cuando el largo del mensaje recibido en "self.recv_buffer" es mayor al parámetro "buff_size" recibido en la función.
+Por ejemplo, recordemos que nuestro algoritmo siempre recibe bloques de 16 bytes (excepto el último). Ahora supongamos que recibimos dos
+bloques de 16 bytes, pero nuestro "buff_size" es de tamaño 30. La función debe retornar los 30 primeros bytes. Sin embargo ¿qué sucede con los 2 últimos bytes?
+No los podemos retornar pero tampoco los podemos perder.
+
+La solución a ese problema se encuentran en los pasos 14 y 15. Específicamente el paso 15 conserva esos dos últimos bytes en "self.recv_buffer". Luego, esos
+2 bytes se pueden obtener al ejecutar otro llamado a la función recv.
+
 ## El método close
 
+Cierra el SocketTCP y libera sus recursos asociados.
 
+### Envío de FIN
+
+1) Se establece una variable "timeouts_completed" con el valor 0.
+2) Se crea un segmento TCP cuyo número de secuencia es "self.seq" y contiene un mensaje FIN.
+3) Se envía el segmento TCP al receptor.
+
+### Recepción de FIN + ACK
+
+4) Espera a recibir otro segmento TCP del socket receptor.
+     - Si transcurre más de "self.timeout" segundos y se cumple "timeouts_completed < 3", entonces sumamos 1 a "timeouts_completed"
+       y nos devolvemos al paso 3.
+     - Si transcurre más de "self.timeout" segundos y "timeouts_completed" es mayor o igual a 3, entonces se cierra el socket UDP
+       y se termina la ejecución de la función.
+     - Si se recibe un segmento TCP, se revisa que su número de secuencia sea (self.seq + 1) y contenga el mensaje FIN + ACK.
+       De lo contrario, se retorna al paso 4.
+
+### Envío de ACK
+
+5) Se reinicia el valor de "timeouts_completed". Ahora es 0.
+6) Se crea un segmento TCP cuyo número de secuencia es "self.seq + 2" y contiene un mensaje ACK.
+7) Se envía el segmento TCP al receptor tres veces. Se espera un timeout entre cada envío usando la función "recvfrom" del socket UDP.
+     - Si "recvfrom" recibe un FIN + ACK, simplemente se ignora y se vuelve a ejecutar otro "recvfrom" para seguir obteniendo timeouts.
+8) Se cierra el socket UDP del socket emisor.
+
+### Decisiones de diseño
+
+A pesar de que el enunciado pide de que se espere 1 timeout entre cada envío de FIN y cada envío de ACK, eso no siempre es posible en nuestro código, pues como se observa en el paso 4 y paso 7, es posible que "recvfrom" reciba algún mensaje atrasado que evite que se active el timeout. Por lo tanto, eso puede causar un poco más de espera entre cada envío del mensaje FIN y el mensaje ACK.
+
+No obstante, nuestro código siempre manda a lo más 3 mensajes FIN, y siempre 3 mensajes ACK, tal como lo pide el enunciado.
+
+## El método recv_close
+
+Maneja el fin de conexión desde el lado del receptor.
+
+### Recepción de FIN
+
+1) Espera indefinidamente a recibir un segmento TCP del socket emisor.
+     - Si el segmento tiene un número de secuencia igual a "self.seq" y además incluye un mensaje FIN, entonces se
+       avanza al paso 2.
+     - Si el número de secuencia es MENOR a "self.seq", entonces el emisor sigue ejecutando el método send y está esperando
+       a recibir el ACK asociado al último bloque del mensaje envíado. Para solucionarlo, se envía un mensaje ACK con el número
+       de secuencia actual del socket receptor. Posteriormente se regresa al paso 1.
+     - En cualquier otro caso, se retorna al paso 1.
+
+### Envío de FIN + ACK
+
+2) Se crea un segmento TCP con el número de secuencia (self.seq + 1) y un mensaje FIN + ACK.
+3) Se envía el segmento TCP al socket emisor.
+
+### Recepción de ACK
+
+El receptor espera 3 timeouts para recibir un ACK del emisor.
+
+4) Se establece el timeout del socket UDP, y se crea una variable "timeouts_completed" con el valor 0.
+5) Espera a recibir otro segmento TCP del socket emisor.
+     - Si transcurre más de "self.timeout" segundos y se cumple "timeouts_completed < 3", entonces sumamos 1 a "timeouts_completed"
+       y nos devolvemos al paso 5.
+     - Si transcurre más de "self.timeout" segundos y "timeouts_completed" es mayor o igual a 3, se avanza al paso 6.
+     - Si se recibe un segmento TCP, se revisa que su número de secuencia sea (self.seq + 2) y contenga el mensaje ACK.
+       Si se cumple lo anterior, se avanza al paso 6.
+     - Si el segmento TCP tiene el número de secuencia "self.seq" y además contiene un mensaje FIN, entonces se reinician los timeouts
+       y se vuelve al paso 2.
+     - En cualquier otro caso, se vuelve al paso 5.
+6) Se cierra el socket UDP y se termina la ejecución de la función.
+
+### Decisiones de diseño y casos bordes
+
+Este es el único lugar donde el socket receptor utiliza timeouts, ya que fue la mejor forma que hallamos para asegurar de que el receptor
+espere 3 timeouts.
+
+Por otro lado, en el paso 1 se aprecia el caso borde cuando se pierde el último ACK que espera el socket emisor antes de finalizar "send".
+Al ocurrir eso, el receptor avanza a la función "recv_close", pero el emisor sigue esperando en "send", y por lo tanto sigue reenviando
+último bloque de bytes. Entonces, estamos obligados a que "recv_close" tenga la capacidad de detectar ese caso borde y reenviar el último
+ACK que espera el socket emisor.
+
+Además, en el paso 5 también se aprecia un caso borde similar, cuando se pierde el FIN + ACK que está esperando el emisor.
+En ese momento el receptor está esperando un ACK pero el emisor puede enviar otro FIN (máximo 3), así que también estamos forzados a
+manejar ese caso. Nuestra solución fue simular que ese FIN es el primer FIN que ha recibido la función y por eso volvemos al paso 2.
+No es posible que se produzca un bucle infinito ya que el emisor solo puede mandar a lo más 3 mensajes FIN.
+
+###
 
