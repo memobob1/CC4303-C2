@@ -1,0 +1,5 @@
+Hola servidor.
+Quiero decirte que este es un mensaje de prueba con mas de 16 caracteres.
+Espero que puedas recibirlo correctamente.
+Nos vemos en la otra terminal.
+(No puedo escribir tildes :c).

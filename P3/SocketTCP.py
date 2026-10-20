@@ -1,15 +1,7 @@
-import socket 
-import random
+import socket, random
 
+# La cantidad de bytes que utiliza el número de secuencia.
 SEQ_NBYTES: int = 2
-FREE_PORT: int = 8001
-
-def get_new_port() -> int:
-    global FREE_PORT
-    new_port = FREE_PORT
-    FREE_PORT += 1
-    return new_port
-
 
 class ParsedSegmentTCP:
     """Almacena de forma organizada la información de un segmento TCP.
@@ -39,12 +31,11 @@ class SocketTCP:
         # Socket UDP subyacente
         self.udp_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         #Timeout para stop & wait
-        self.timeout: float = 5 #segundos
+        self.timeout: float = 0.5 #segundos
 
         # Acá comenzamos definiendo cada byte
         self.dest_addr: tuple[str, int] | None = None
         self.seq: int = random.randint(0, 100)  # para handshake y stop & wait
-        self.expected_seq: int = 0
 
         # Buffer de recepción para stop & wait
         self.buffer_size: int = SEQ_NBYTES + 1 + 16
@@ -101,32 +92,44 @@ class SocketTCP:
             address: Una tupla (IP, puerto) que representa una dirección.
         """
 
-        # Envía el mensaje SYN junto con el número de secuencia al socket servidor.
+        # Envía el mensaje SYN junto con el número de secuencia al socket receptor.
         first_handshake_step: bytes = self.create_segment(ParsedSegmentTCP(self.seq, syn=1))
-        self.udp_socket.sendto(first_handshake_step, address)
 
-        # Espera a recibir un mensaje SYN + ACK del socket servidor.
-        second_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
-        segment_struct: ParsedSegmentTCP = self.parse_segment(second_handshake_step)
+        # El uso de connect() indica que este es el socket emisor, entonces establecemos su timer.
+        self.udp_socket.settimeout(self.timeout)
 
-        # El contenido de este mensaje incluye la dirección del nuevo socket que se usará
-        # para comunicarse con este socket. Guardamos la dirección.
-        self.dest_addr = ('localhost', int.from_bytes(segment_struct.data, "big"))
+        while True:
+            print(f"El emisor envía el primer handshake con la secuencia {self.seq}")
+            self.udp_socket.sendto(first_handshake_step, address)
 
-        # Revisamos que el mensaje recibido efectivamente contenga SYN, ACK y el
-        # número de secuencia esperado (self.seq + 1).
-        if segment_struct.seq == self.seq + 1 and segment_struct.syn and segment_struct.ack:
+            # Espera a recibir un segmento SYN + ACK del socket receptor.
+            try:
+                second_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
+            except (socket.timeout, ConnectionResetError): 
+                continue
 
-            # Se envía el mensaje ACK al socket servidor, junto con el número de secuencia + 2.
-            third_handshake_step: bytes = self.create_segment(ParsedSegmentTCP(self.seq + 2, ack=1))
-            self.udp_socket.sendto(third_handshake_step, address)
+            segment_struct: ParsedSegmentTCP = self.parse_segment(second_handshake_step)
 
-            self.seq = self.seq + 3
+            # Revisamos que el mensaje recibido efectivamente contenga SYN, ACK y el
+            # número de secuencia esperado (self.seq + 1).
+            if segment_struct.seq == self.seq + 1 and segment_struct.syn and segment_struct.ack:
+                # El contenido de este mensaje incluye la dirección del nuevo socket que se usará
+                # para comunicarse con este socket. Guardamos la dirección.
+                new_port = int.from_bytes(segment_struct.data, "big")
+                self.dest_addr = ('localhost', new_port)
+                print(f"El emisor recibe exitosamente el segundo handshake con la secuencia {segment_struct.seq}" +
+                      f" y el puerto {new_port}.")
+                break
 
-        # Si el mensaje no fue el esperado, entonces no se pudo establecer un canal de comunicación.
-        # Invalidamos la dirección recibida previamente.
-        else:
-            self.dest_addr = None
+        # Se envía el mensaje ACK al socket receptor, junto con el número de secuencia + 2.
+        print(f"El emisor envía el tercer handshake con la secuencia {self.seq + 2}")
+        third_handshake_step: bytes = self.create_segment(ParsedSegmentTCP(self.seq + 2, ack=1))
+        self.udp_socket.sendto(third_handshake_step, address)
+
+        # El tercer handshake fue enviado con el número de secuencia self.seq + 2.
+        # Para reducir confusiones, impondremos que el envío del mensaje real inicia desde el número
+        # de secuencia self.seq + 3.
+        self.seq = self.seq + 3
 
     def accept(self) -> tuple["SocketTCP", tuple[str, int]]:
         """Espera una petición de tipo SYN para iniciar una comunicación con otro socket.
@@ -136,50 +139,61 @@ class SocketTCP:
             comunicación con el socket que envío la petición de tipo SYN.
         """
 
-        # Espera a recibir un mensaje SYN con un número de secuencia.
-        first_handshake_step, other_address = self.udp_socket.recvfrom(self.buffer_size)
-        first_segment_struct: ParsedSegmentTCP = self.parse_segment(first_handshake_step)
-        other_seq: int = first_segment_struct.seq
+        while True:
+    
+            # Espera a recibir un mensaje SYN con un número de secuencia.
+            first_handshake_step, other_address = self.udp_socket.recvfrom(self.buffer_size)
+            first_segment_struct: ParsedSegmentTCP = self.parse_segment(first_handshake_step)
+            other_seq: int = first_segment_struct.seq
 
-        if first_segment_struct.syn:
+            if first_segment_struct.syn:
+                print(f"El receptor recibe exitosamente el primer handshake con la secuencia {other_seq}.")
 
-            # Después de recibir el mensaje SYN, el socket debe enviar un mensaje SYN + ACK al
-            # socket cliente, junto con el número de secuencia recibido incrementado en 1.
-            segment: ParsedSegmentTCP = ParsedSegmentTCP(other_seq + 1, syn=1, ack=1)
-
-            # Además, el segmento incluirá la dirección del nuevo socket que se usará
-            # para establecer el canal de comunicación.
-            new_port: int = get_new_port()
-            segment.data = new_port.to_bytes(SEQ_NBYTES, "big")
-
-            second_handshake_step: bytes = self.create_segment(segment)
-            self.udp_socket.sendto(second_handshake_step, other_address)
-
-            # Se espera a recibir un mensaje ACK del socket cliente con el número de secuencia
-            # original incrementado en 2.
-            third_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
-            third_segment_struct = self.parse_segment(third_handshake_step)
-
-            if third_segment_struct.seq == other_seq + 2 and third_segment_struct.ack:
-
-                # Se crea el nuevo socket que podrá enviar mensajes a la dirección del socket cliente.
-                # Este socket contendrá el número de secuencia recibido en el primer segmento del socket cliente.
+                # Se crea el nuevo socket que podrá enviar mensajes a la dirección del socket emisor.
                 new_socket: SocketTCP = SocketTCP()
                 new_socket.dest_addr = other_address
-                new_socket.seq = other_seq
-
-                new_socket.expected_seq = other_seq + 3
-
-                # Este nuevo socket estará escuchando en la dirección generada previamente, y que además
-                # ya es conocida por el socket cliente.
-                new_address = ('localhost', new_port)
+        
+                # Obtenemos cualquier puerto libre del computador para asignarselo a este nuevo socket.
+                new_address = ('localhost', 0)
                 new_socket.bind(new_address)
-                return new_socket, new_address
-            
-            elif third_segment_struct.seq != other_seq + 2 or not third_segment_struct.ack:
-                raise ConnectionError("El mensaje recibido no es un ACK válido.")
+                # Antes de utilizar el nuevo socket, debemos completar el three-way handshake.
 
+                # Ahora viene el segundo handshake, el socket servidor debe enviar un segmento SYN + ACK al
+                # socket emisor, junto con el número de secuencia recibido incrementado en 1.
+                segment: ParsedSegmentTCP = ParsedSegmentTCP(other_seq + 1, syn=1, ack=1)
 
+                # Además, el segmento incluirá el puerto del nuevo socket que se usará
+                # para establecer el canal de comunicación.
+                new_port: int = new_socket.udp_socket.getsockname()[1]
+                print(f"Se crea un nuevo socket en el puerto {new_port}.")
+                segment.data = new_port.to_bytes(4, "big")
+                second_handshake_step: bytes = self.create_segment(segment)
+
+                while True:
+                    # Se envía el segundo handshake.
+                    print(f"El receptor envía el segundo handshake con la secuencia {other_seq + 1}")
+                    self.udp_socket.sendto(second_handshake_step, other_address)
+        
+                    # Ahora se espera a recibir el tercer handshake (un mensaje ACK) del socket emisor,
+                    # junto con el número de secuencia original incrementado en 2.
+                    third_handshake_step, _ = self.udp_socket.recvfrom(self.buffer_size)
+                    third_segment_struct = self.parse_segment(third_handshake_step)
+
+                    if third_segment_struct.seq == other_seq + 2 and third_segment_struct.ack:
+                        print(f"El receptor recibe exitosamente el tercer handshake con la secuencia {third_segment_struct.seq}.")
+
+                        # El three-way handshake fue completado, así que sí se usará el nuevo socket
+                        # que instanciamos antes. Solamente falta actualizar su número de secuencia.
+
+                        # En connect() establecimos que el número de secuencia que el emisor
+                        # utilizará para empezar a enviar el mensaje real es (self.seq + 3).
+                        # Entonces el receptor debe esperar la secuencia (other_seq + 3).
+                        new_socket.seq = other_seq + 3                   
+                        
+                        return new_socket, new_address
+
+                    # Si se recibe el largo del mensaje en lugar del tercer handshake, entonces se reinicia el bucle
+                    # y se reenvía el segundo handshake para que el receptor vuelva a enviar el tercer handshake.
 
     def send(self, message: bytes) -> None:
         """Envía un mensaje a un socket destino.
@@ -190,20 +204,33 @@ class SocketTCP:
         
         total_length: int = len(message)
         length_bytes: bytes = total_length.to_bytes(4, "big")
-        lenght_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
+        length_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
+        print(f"El largo total del mensaje a enviar es {total_length}.")
 
-        # Stop & Wait para el pimer segmento (largo)
+        # Stop & Wait para el primer segmento (largo)
         while True:
-            self.udp_socket.sendto(self.create_segment(lenght_segment), self.dest_addr)
+            print(f"Envíando segmento con el largo total del mensaje. La secuencia es {self.seq} y el largo del bloque es {len(length_bytes)}.")
+            self.udp_socket.sendto(self.create_segment(length_segment), self.dest_addr)
             try:
-                self.udp_socket.settimeout(self.timeout)
-                ack_segment, _ = self.udp_socket.recvfrom(self.buffer_size)
-                ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
-                if ack_segment_struct.seq == self.seq + 1 and ack_segment_struct.ack:
-                    self.seq += 1
-                    break
+                ack_segment, other_address = self.udp_socket.recvfrom(self.buffer_size)      
             except (socket.timeout, ConnectionResetError): 
                 continue
+
+            ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
+
+            # Caso borde: Se perdió el tercer handshake al final de connect()
+            # Entonces el receptor nos reenvía el segundo handshake. Debemos completar el three-way handshake.
+            if ack_segment_struct.seq == self.seq - 2 and ack_segment_struct.syn and ack_segment_struct.ack:
+                # Se reenvía el mensaje ACK al socket receptor.
+                print(f"El emisor ha vuelto a recibir el segundo handshake.")
+                print(f"Reenviando el tercer handshake con la secuencia {self.seq - 1}.")
+                third_handshake_step: bytes = self.create_segment(ParsedSegmentTCP(self.seq - 1, ack=1))
+                self.udp_socket.sendto(third_handshake_step, other_address)
+
+            elif ack_segment_struct.seq == self.seq + len(length_bytes) and ack_segment_struct.ack:
+                print(f"El emisor recibe correctamente el ACK con la secuencia {self.seq + len(length_bytes)}.")
+                self.seq += len(length_bytes)
+                break
         
         # Enviamos el mensaje en fragmentos de 16 bytes, cada uno con su propio número de secuencia.
         i = 0
@@ -215,25 +242,23 @@ class SocketTCP:
             
             # Implementamos Stop & Wait
             while True:
+                print(f"Envíando segmento con la secuencia {self.seq} y largo del bloque {len(block)}.")
                 self.udp_socket.sendto(self.create_segment(parsed_segment), self.dest_addr)
                 try:
-                    # Primero se establece el timeout para que el socket no se quede esperando indefinidamente.
-                    self.udp_socket.settimeout(self.timeout)
-
-                    # Se espera a recibir un mensaje ACK del socket destino.
                     ack_segment, _ = self.udp_socket.recvfrom(self.buffer_size)
-                    ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
-
-                    # Si la secuencia recibida es la esperada (self.seq + 1) y el mensaje contiene un ACK, entonces se incrementa el número de secuencia y se continúa con el siguiente fragmento.
-                    if ack_segment_struct.seq == self.seq + 1 and ack_segment_struct.ack:
-                        # Si se recibe el mensaje ACK esperado, se incrementa el número de secuencia y se continúa con el siguiente fragmento.
-                        self.seq += 1
-                        i += 16
-                        break
-                
-                # Si nunca nos llegó el mensaje ACK dentro del timeout, entonces se retransmite el segmento.
                 except (socket.timeout, ConnectionResetError):
                     continue
+
+                ack_segment_struct: ParsedSegmentTCP = self.parse_segment(ack_segment)
+                # Si la secuencia recibida es la esperada (self.seq + 1) y el mensaje contiene un ACK, entonces se incrementa el número de secuencia y se continúa con el siguiente fragmento.
+                if ack_segment_struct.seq == self.seq + len(block) and ack_segment_struct.ack:
+                    # Si se recibe el mensaje ACK esperado, se incrementa el número de secuencia y se continúa con el siguiente fragmento.
+                    print(f"El emisor recibe correctamente el ACK con la secuencia {self.seq + len(block)}.")
+                    self.seq += len(block)
+                    i += len(block)
+                    break
+
+                # Si nunca nos llegó el mensaje ACK dentro del timeout, entonces se retransmite el segmento.
 
 
     def recv(self, buff_size: int) -> bytes:
@@ -251,43 +276,48 @@ class SocketTCP:
                 segment, _ = self.udp_socket.recvfrom(self.buffer_size)
                 segment_struct: ParsedSegmentTCP = self.parse_segment(segment)
 
-                if segment_struct.seq == self.expected_seq:
+                if segment_struct.seq == self.seq:
                     self.bytes_remaining = int.from_bytes(segment_struct.data, "big")
+                    print(f"El receptor recibe el largo total del mensaje ({self.bytes_remaining}) con la secuencia {self.seq}.")
 
                     # Enviamos mensaje ACK
-                    ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + 1, ack=1)
+                    print(f"Envíando un mensaje ACK con la secuencia {self.seq + len(segment_struct.data)}.")
+                    ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq + len(segment_struct.data), ack=1)
                     self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
-                    self.expected_seq += 1
+                    self.seq += len(segment_struct.data)
                     break
-                else: # Caso borde
-                    # Si llega algo fuera de seq
-                    ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq, ack=1)
-                    self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
-        
+
+                # No hay caso borde al momento de recibir la longitud del mensaje. Lo único que se pudo haber
+                # perdido antes por parte del receptor es el SYN + ACK, pero ese caso ya es solucionado por accept().
         
         # Recibimos los fragmentos de data
         while len(self.recv_buffer) < buff_size and self.bytes_remaining > 0:
             segment, _ = self.udp_socket.recvfrom(self.buffer_size)
             segment_struct: ParsedSegmentTCP = self.parse_segment(segment)
 
+            print(f"El receptor recibe un mensaje con la secuencia {segment_struct.seq}.")
+
             # Si el número de secuencia del segmento recibido es el esperado, entonces se procesa el segmento.
-            if segment_struct.seq == self.expected_seq:
+            if segment_struct.seq == self.seq:
                 # Agregamos el bloque de datos del segmento recibido al buffer de recepción y actualizamos la cantidad de bytes restantes por recibir.
                 self.recv_buffer += segment_struct.data
                 self.bytes_remaining -= len(segment_struct.data)
 
+                # Se incrementa el número de secuencia esperado para el siguiente segmento.
+                self.seq += len(segment_struct.data)
+
                 # Se envía un mensaje ACK con el número de secuencia incrementado en 1.
-                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq + 1, ack=1)
+                print(f"Envíando un mensaje ACK con la secuencia {self.seq}.")
+                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, ack=1)
                 self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
 
-                # Se incrementa el número de secuencia esperado para el siguiente segmento.
-                self.expected_seq += 1
-
-            elif segment_struct.seq < self.expected_seq: # Caso borde
+            elif segment_struct.seq < self.seq: # Caso borde
                 # Si el numero de secuencia no coincide,
                 # probablemente el mensaje no llegó y se volvió a enviar (por parte del emisor)
                 # Entonces se envía un mensaje ACK con el número de secuencia esperado.
-                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.expected_seq, ack=1)
+                print(f"Es un mensaje que el receptor ya había almacenado antes.")
+                print(f"Envíando un mensaje ACK con la secuencia {self.seq}.")
+                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, ack=1)
                 self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
         
         # Solo retornamos la cantidad de bytes solicitada, y dejamos el resto en el buffer para la próxima llamada a recv
@@ -302,69 +332,91 @@ class SocketTCP:
         fin_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, fin=1)
         
         # Implementamos Stop & Wait para enviar el segmento FIN y esperar un ACK del socket destino.
-        while True:
-            self.udp_socket.sendto(self.create_segment(fin_segment), self.dest_addr)
-            try:
-                self.udp_socket.settimeout(self.timeout)
-                ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
 
-                # Comprobamos si el mensaje recibido es un ACK con el número de secuencia esperado (self.seq + 1).
-                if ack_segment.seq == self.seq + 1 and ack_segment.ack:
-                    break
+        timeouts_completed: int = 0
+        send_FIN = True
+        while timeouts_completed < 3:
+
+            if send_FIN:
+                print("El emisor envía un mensaje FIN para iniciar el cierre de conexión.")
+                self.udp_socket.sendto(self.create_segment(fin_segment), self.dest_addr)
+                send_FIN = False
+
+            try:
+                fin_ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
             except (socket.timeout, ConnectionResetError):
+                timeouts_completed += 1
+                send_FIN = True
                 continue
 
-        # Esperamos el mensaje fin del receptor
-        while True:
-            try:
-                self.udp_socket.settimeout(self.timeout)
-                fin_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
+            fin_ack_segment: ParsedSegmentTCP = self.parse_segment(fin_ack_bytes)
+            
+            # Comprobamos si el mensaje recibido es un FIN + ACK con el número de secuencia esperado (self.seq + 1).
+            if fin_ack_segment.seq == self.seq + 1 and fin_ack_segment.fin and fin_ack_segment.ack:
+                print("El emisor recibe exitosamente un FIN + ACK para continuar el cierre de la conexión.")
+                timeouts_completed = 0
+                break
 
-                if fin_segment.fin == 1:
-                    last_ack = ParsedSegmentTCP(fin_segment.seq + 1, ack=1)
-                    self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+        # Enviamos 3 veces el mensaje ACK al receptor.
+        while timeouts_completed < 3:
+            print("El emisor envía un ACK para finalizar el close().")
+            last_ack = ParsedSegmentTCP(self.seq + 2, ack=1)
+            self.udp_socket.sendto(self.create_segment(last_ack), self.dest_addr)
+
+            while True:
+                try:
+                    self.udp_socket.recvfrom(self.buffer_size)
+                except (socket.timeout, ConnectionResetError):
+                    timeouts_completed += 1
                     break
-            except (socket.timeout, ConnectionResetError):
-                continue
 
         # Liberamos los recursos asociados al socket UDP subyacente.
         self.udp_socket.close()
 
     def recv_close(self):
         """Maneja el fin de conexión desde el lado del receptor."""     
-        other_seq: int = 0
-
         # receptor espera recibir el mensaje fin del emisor
         while True:
+
+            fin_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
+            fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
+
+            if fin_segment.seq == self.seq and fin_segment.fin:
+                print("El receptor recibe exitosamente el primer mensaje FIN para iniciar el cierre de la conexión.")
+                fin_ack_segment = ParsedSegmentTCP(self.seq + 1, fin=1, ack=1)
+                print("El receptor envía un FIN + ACK para continuar el cierre de la conexión.")
+                self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
+                break
+
+            elif fin_segment.seq < self.seq:
+                # El emisor no recibió el ultimo ACK, entonces se vuelve a reenviar.
+                print("El receptor reenvía el ultimo ACK para confirmar la recepción completa del mensaje.")
+                ack_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, ack=1)
+                self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
+
+        timeouts_completed = 0
+        self.udp_socket.settimeout(self.timeout)
+        print("El receptor espera 3 timeouts para recibir un ACK del emisor.")
+        while timeouts_completed < 3:
             try:
-                self.udp_socket.settimeout(self.timeout)
-                fin_bytes, other_addr = self.udp_socket.recvfrom(self.buffer_size)
-                fin_segment: ParsedSegmentTCP = self.parse_segment(fin_bytes)
-
-                if fin_segment.fin == 1:
-                    other_seq = fin_segment.seq
-                    ack_segment = ParsedSegmentTCP(other_seq + 1, ack=1)
-                    self.udp_socket.sendto(self.create_segment(ack_segment), self.dest_addr)
-                    break
-            except (socket.timeout, ConnectionResetError):
-                continue
-
-        # Ahora el receptor envía su propio mensaje fin al emisor
-        fin_segment = ParsedSegmentTCP(self.seq, fin=1)
-
-        while True:
-            self.udp_socket.sendto(self.create_segment(fin_segment), self.dest_addr)
-            try:
-                self.udp_socket.settimeout(self.timeout)
                 ack_bytes, _ = self.udp_socket.recvfrom(self.buffer_size)
-                ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
 
-                if ack_segment.seq == self.seq + 1 and ack_segment.ack:
-                    break
             except (socket.timeout, ConnectionResetError):
+                timeouts_completed += 1
+                print(f"Timeouts completados: {timeouts_completed}")
                 continue
+
+            ack_segment: ParsedSegmentTCP = self.parse_segment(ack_bytes)
+            if ack_segment.seq == self.seq + 2 and ack_segment.ack:
+                print("El receptor recibe exitosamente un mensaje ACK para finalizar el cierre de la conexión.")
+                break
+
+            elif ack_segment.seq == self.seq and ack_segment.fin:
+                print("El receptor ha recibido otro mensaje FIN del emisor.")
+                print("El receptor reenvía un FIN + ACK al emisor, y vuelve a esperar durante otros 3 timeouts.")
+                fin_ack_segment = ParsedSegmentTCP(self.seq + 1, fin=1, ack=1)
+                self.udp_socket.sendto(self.create_segment(fin_ack_segment), self.dest_addr)
+                timeouts_completed = 0
 
         # Liberamos los recursos asociados al socket UDP subyacente.
         self.udp_socket.close()
@@ -374,17 +426,3 @@ class SocketTCP:
 if __name__ == "__main__":
 
     mi_socket = SocketTCP()
-
-    test_1 = b'\x00\x20\x05\x06Este es un mensaje'
-    print(test_1)
-    parsed_segment_tcp: ParsedSegmentTCP = mi_socket.parse_segment(test_1)
-
-    print(parsed_segment_tcp.seq)
-    print(parsed_segment_tcp.syn)
-    print(parsed_segment_tcp.ack)
-    print(parsed_segment_tcp.fin)
-    print(parsed_segment_tcp.data)
-
-    test_2 = mi_socket.create_segment(parsed_segment_tcp)
-    print("Nuevo segmento:", test_2)
-    print(test_1 == test_2)
