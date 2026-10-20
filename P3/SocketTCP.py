@@ -201,7 +201,7 @@ class SocketTCP:
         Atributos:
             message: Un mensaje en bytes que se desea enviar.
         """
-
+        
         total_length: int = len(message)
         length_bytes: bytes = total_length.to_bytes(4, "big")
         length_segment: ParsedSegmentTCP = ParsedSegmentTCP(self.seq, data=length_bytes)
