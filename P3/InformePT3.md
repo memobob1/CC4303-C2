@@ -150,6 +150,14 @@ Al final de este proceso, el socket receptor original se mantiene activo infinit
 En el método "connect" establecimos que el número de secuencia que el emisor utilizará para empezar a enviar el mensaje real es (self.seq + 3).
 Por eso en el paso 10 se establece que el número de secuencia del receptor es (other_seq + 3).
 
+## Diagrama del paso 4
+
+![Diagrama de la pregunta 4]("Diagrama_de_P4.png")
+
+## Diagrama del paso 7
+
+![Diagrama de la pregunta 7]("Diagrama_de_P7.png")
+
 ## El método send
 
 Recibe una cadena de bytes y las envía al socket receptor con el que estableció un canal de comunicación.
