@@ -9,6 +9,9 @@ Auxiliar: Julián Ferreira
 
 Enlace de github: https://github.com/memobob1/CC4303-C2/tree/main/P3
 
+Disclaimer Uso de IA: Se utilizó IA para entender cómo se podían ejecutar operaciones de bits en Python, y además se utilizó IA para
+entender cómo funcionaba la función settimeout y a qué otras funciones afecta.
+
 ## Manejo de segmentos TCP
 
 ### La estructura de datos ParsedSegmentTCP
