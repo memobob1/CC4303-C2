@@ -348,5 +348,14 @@ En ese momento el receptor está esperando un ACK pero el emisor puede enviar ot
 manejar ese caso. Nuestra solución fue simular que ese FIN es el primer FIN que ha recibido la función y por eso volvemos al paso 2.
 No es posible que se produzca un bucle infinito ya que el emisor solo puede mandar a lo más 3 mensajes FIN.
 
-###
+## Prueba del funcionamiento de SocketTCP
 
+![Prueba](Prueba.png)
+
+## Observaciones importantes
+
+Puede modificar el valor de SEQ_NBYTES al inicio del código de SocketTCP.
+
+Por otro lado, todas las funciones se pueden caer si los programas que ejecutan el socket emisor o receptor se cayeran. Ese caso no es manejado por nuestro código. El otro socket sobreviviente simplemente se quedaría esperando infinitamente, o enviando mensajes infinitamente.
+
+Para las pruebas de pérdidas de datos, se utilizó "python3 cliente.py localhost 8000 < archivo.txt"
